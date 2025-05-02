@@ -18,7 +18,7 @@ jobs:
 
       - name: Clone source repo
         run: |
-          git clone https://github.com/YOUR_USERNAME/YOUR_SOURCE_REPO.git source
+          git clone https://github.com/PaulMares/crud-react-node-mySQL-go.git source
 
       - name: Check if service has changed
         id: changed
