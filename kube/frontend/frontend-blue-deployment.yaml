@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend-blue
+  namespace: qa
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+      color: blue
+  template:
+    metadata:
+      labels:
+        app: frontend
+        color: blue
+    spec:
+      containers:
+        - name: frontend
+          image: 629585638563.dkr.ecr.us-east-1.amazonaws.com/devops-final/frontend:latest
+          ports:
+            - containerPort: 80

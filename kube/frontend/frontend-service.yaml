@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: qa
+spec:
+  selector:
+    app: frontend
+    color: blue  # Route by default to blue — will be switched by the workflow
+  ports:
+    - port: 80
+      targetPort: 80
+  type: ClusterIP

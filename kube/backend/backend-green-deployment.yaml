@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-green
+  namespace: qa
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+      color: green
+  template:
+    metadata:
+      labels:
+        app: backend
+        color: green
+    spec:
+      containers:
+        - name: backend
+          image: 629585638563.dkr.ecr.us-east-1.amazonaws.com/devops-final/backend:latest
+          ports:
+            - containerPort: 8800
