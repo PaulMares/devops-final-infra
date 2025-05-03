@@ -6,21 +6,25 @@ on:
   workflow_dispatch:     # Allow manual trigger
 
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
     strategy:
       matrix:
         service: [ frontend, backend, api-1, api-2 ]
+
+    env:
+      ECR_URI: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+      REPO_PREFIX: devops-final
+      NAMESPACE: qa
 
     steps:
       - name: Checkout infra repo
         uses: actions/checkout@v3
 
       - name: Clone source repo
-        run: |
-          git clone https://github.com/PaulMares/crud-react-node-mySQL-go.git source
+        run: git clone https://github.com/PaulMares/crud-react-node-mySQL-go.git source
 
-      - name: Check if service has changed
+      - name: Check if ${{ matrix.service }} has changed
         id: changed
         working-directory: source
         run: |
@@ -34,13 +38,14 @@ jobs:
 
           if git diff --name-only $BASE_SHA $HEAD_SHA | grep "^${{ matrix.service }}/"; then
             echo "changed=true" >> $GITHUB_OUTPUT
+            echo "image_tag=${HEAD_SHA:0:7}" >> $GITHUB_OUTPUT
           else
             echo "changed=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Skip if service not changed
-        if: steps.changed.outputs.changed == 'false'
-        run: echo "No changes to ${{ matrix.service }}, skipping."
+      - name: Exit if service unchanged
+        if: steps.changed.outputs.changed != 'true'
+        run: echo "${{ matrix.service }} has not changed. Skipping build and deploy."
 
       - name: Configure AWS credentials
         if: steps.changed.outputs.changed == 'true'
@@ -57,14 +62,37 @@ jobs:
       - name: Build and push Docker image to ECR
         if: steps.changed.outputs.changed == 'true'
         run: |
-          SERVICE_NAME=${{ matrix.service }}
-          IMAGE_TAG=${GITHUB_SHA::7}
-          ECR_URI=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
-          REPO_NAME=devops-final/$SERVICE_NAME
+          IMAGE_TAG=${{ steps.changed.outputs.image_tag }}
+          SERVICE=${{ matrix.service }}
+          
+          docker build -t $ECR_URI/$REPO_PREFIX/$SERVICE:$IMAGE_TAG ./source/$SERVICE
+          docker push $ECR_URI/$REPO_PREFIX/$SERVICE:$IMAGE_TAG
+          
+          docker tag $ECR_URI/$REPO_PREFIX/$SERVICE:$IMAGE_TAG $ECR_URI/$REPO_PREFIX/$SERVICE:latest
+          docker push $ECR_URI/$REPO_PREFIX/$SERVICE:latest
 
-          docker build -t $ECR_URI/$REPO_NAME:$IMAGE_TAG ./source/$SERVICE_NAME
-          docker push $ECR_URI/$REPO_NAME:$IMAGE_TAG
+      - name: Update kubeconfig
+        if: steps.changed.outputs.changed == 'true'
+        run: aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} --name ${{ secrets.EKS_CLUSTER_NAME }}
 
-          # Optional: Push latest tag
-          docker tag $ECR_URI/$REPO_NAME:$IMAGE_TAG $ECR_URI/$REPO_NAME:latest
-          docker push $ECR_URI/$REPO_NAME:latest
+      - name: Blue/green deploy to QA
+        if: steps.changed.outputs.changed == 'true'
+        run: |
+          SERVICE=${{ matrix.service }}
+          IMAGE_TAG=${{ steps.changed.outputs.image_tag }}
+          
+          CURRENT_COLOR=$(kubectl get svc $SERVICE -n $NAMESPACE -o jsonpath='{.spec.selector.color}')
+          if [ "$CURRENT_COLOR" = "green" ]; then NEW_COLOR=blue; else NEW_COLOR=green; fi
+          
+          echo "Deploying $SERVICE to $NEW_COLOR in namespace $NAMESPACE using tag $IMAGE_TAG"
+          
+          # Update image
+          kubectl set image deployment/$SERVICE-$NEW_COLOR \
+            $SERVICE=$ECR_URI/$REPO_PREFIX/$SERVICE:$IMAGE_TAG -n $NAMESPACE
+          
+          # Wait for rollout
+          kubectl rollout status deployment/$SERVICE-$NEW_COLOR -n $NAMESPACE
+          
+          # Swap traffic
+          kubectl patch service $SERVICE -n $NAMESPACE -p \
+            "{\"spec\": {\"selector\": {\"app\": \"$SERVICE\", \"color\": \"$NEW_COLOR\"}}}"
