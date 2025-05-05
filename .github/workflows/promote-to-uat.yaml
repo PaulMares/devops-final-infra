@@ -118,6 +118,21 @@ jobs:
             kubectl patch service $SERVICE -n uat -p \
               "{\"spec\": {\"selector\": {\"app\": \"$SERVICE\", \"color\": \"$NEW_COLOR\"}}}"
 
+            # If this is the frontend service, get and display the URL
+            if [ "$SERVICE" = "frontend" ]; then
+              # Wait a moment for the LoadBalancer to update
+              sleep 10
+              FRONTEND_URL=$(kubectl get svc $SERVICE -n uat -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+              if [ -z "$FRONTEND_URL" ]; then
+                FRONTEND_URL=$(kubectl get svc $SERVICE -n uat -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+              fi
+              if [ -n "$FRONTEND_URL" ]; then
+                echo "::notice::Frontend URL (UAT): http://$FRONTEND_URL"
+              else
+                echo "::warning::Could not determine frontend URL for UAT environment"
+              fi
+            fi
+
             # Record successful deployment
             echo "$SERVICE:$IMAGE_TAG" > deployed-$SERVICE
           else
