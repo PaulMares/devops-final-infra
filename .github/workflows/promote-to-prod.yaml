@@ -1,0 +1,266 @@
+name: Promote to Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      auto_promote:
+        description: 'Automatically promote all successful UAT deployments'
+        type: boolean
+        default: false
+      frontend:
+        description: 'Promote frontend?'
+        type: boolean
+        default: false
+      backend:
+        description: 'Promote backend?'
+        type: boolean
+        default: false
+      api-1:
+        description: 'Promote api-1?'
+        type: boolean
+        default: false
+      api-2:
+        description: 'Promote api-2?'
+        type: boolean
+        default: false
+
+jobs:
+  download-artifact:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.auto_promote == 'true' }}
+    outputs:
+      services: ${{ steps.set-matrix.outputs.services }}
+
+    steps:
+      - name: Find latest UAT workflow run
+        id: find-workflow
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const workflow_name = "Promote to UAT";
+            // First try to get the workflow by name
+            let workflowsResponse = await github.rest.actions.listWorkflows({
+              owner: context.repo.owner,
+              repo: context.repo.repo
+            });
+
+            let workflowId = null;
+            for (const workflow of workflowsResponse.data.workflows) {
+              if (workflow.name === workflow_name) {
+                workflowId = workflow.id;
+                break;
+              }
+            }
+
+            // If we couldn't find the workflow by name, try the filename as fallback
+            if (!workflowId) {
+              console.log(`Could not find workflow with name "${workflow_name}", trying filename`);
+              workflowId = 'promote-to-uat.yaml';
+            }
+
+            const workflows = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+              status: 'success',
+              per_page: 1
+            });
+
+            if (workflows.data.workflow_runs.length === 0) {
+              console.log('No successful UAT workflow runs found');
+              return;
+            }
+
+            const workflowRun = workflows.data.workflow_runs[0];
+            console.log(`Found workflow run: ${workflowRun.id}`);
+            return workflowRun.id;
+
+      - name: Download artifact
+        if: steps.find-workflow.outputs.result
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const workflowRunId = ${{ steps.find-workflow.outputs.result }};
+
+            const artifacts = await github.rest.actions.listWorkflowRunArtifacts({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: workflowRunId
+            });
+
+            const matchArtifact = artifacts.data.artifacts.find(artifact => {
+              return artifact.name === "deployed-services-uat"
+            });
+
+            if (!matchArtifact) {
+              console.log('No artifacts found');
+              return;
+            }
+
+            const download = await github.rest.actions.downloadArtifact({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              artifact_id: matchArtifact.id,
+              archive_format: 'zip'
+            });
+
+            const fs = require('fs');
+            fs.writeFileSync('${{ github.workspace }}/deployed-services.zip', Buffer.from(download.data));
+
+      - name: Extract artifact
+        if: steps.find-workflow.outputs.result
+        run: |
+          if [ -f "deployed-services.zip" ]; then
+            unzip -o deployed-services.zip
+          else
+            echo "No artifact file found to extract"
+          fi
+
+      - name: Set matrix
+        id: set-matrix
+        run: |
+          if [ -f "deployed_services.json" ]; then
+            SERVICES=$(cat deployed_services.json)
+            echo "services=$SERVICES" >> $GITHUB_OUTPUT
+          else
+            echo "services={\"services\":[]}" >> $GITHUB_OUTPUT
+          fi
+
+  prepare-manual-matrix:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.auto_promote != 'true' }}
+    outputs:
+      services: ${{ steps.set-matrix.outputs.services }}
+
+    steps:
+      - name: Set matrix for manual selection
+        id: set-matrix
+        run: |
+          # Create a JSON array of services to promote
+          echo "{" > services.json
+          echo "  \"services\": [" >> services.json
+
+          # Add services based on inputs
+          if [ "${{ github.event.inputs.frontend }}" = "true" ]; then
+            echo "    {\"name\": \"frontend\"}," >> services.json
+          fi
+
+          if [ "${{ github.event.inputs.backend }}" = "true" ]; then
+            echo "    {\"name\": \"backend\"}," >> services.json
+          fi
+
+          if [ "${{ github.event.inputs.api-1 }}" = "true" ]; then
+            echo "    {\"name\": \"api-1\"}," >> services.json
+          fi
+
+          if [ "${{ github.event.inputs.api-2 }}" = "true" ]; then
+            echo "    {\"name\": \"api-2\"}," >> services.json
+          fi
+
+          # Remove trailing comma if any services were added
+          sed -i '$ s/,$//' services.json
+
+          echo "  ]" >> services.json
+          echo "}" >> services.json
+
+          SERVICES=$(cat services.json)
+          echo "services=$SERVICES" >> $GITHUB_OUTPUT
+
+  determine-matrix:
+    runs-on: ubuntu-latest
+    needs: [download-artifact, prepare-manual-matrix]
+    if: |
+      always() && (
+        (needs.download-artifact.result == 'success' && fromJson(needs.download-artifact.outputs.services).services[0]) ||
+        (needs.prepare-manual-matrix.result == 'success' && fromJson(needs.prepare-manual-matrix.outputs.services).services[0])
+      )
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+
+    steps:
+      - name: Set matrix
+        id: set-matrix
+        run: |
+          if [ "${{ github.event.inputs.auto_promote }}" = "true" ]; then
+            MATRIX='${{ needs.download-artifact.outputs.services }}'
+          else
+            MATRIX='${{ needs.prepare-manual-matrix.outputs.services }}'
+          fi
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+
+  promote-to-prod:
+    needs: determine-matrix
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        service: ${{ fromJson(needs.determine-matrix.outputs.matrix).services }}
+
+    env:
+      ECR_URI: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+      REPO_PREFIX: devops-final
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} --name ${{ secrets.EKS_CLUSTER_NAME }}
+
+      - name: Get current image from UAT
+        id: get-image
+        run: |
+          SERVICE=${{ matrix.service.name }}
+
+          # For auto-promote, use the image tag from the artifact
+          # For manual selection, get the current image from UAT
+          if [ "${{ github.event.inputs.auto_promote }}" = "true" ]; then
+            IMAGE_TAG=${{ matrix.service.image_tag }}
+            echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          else
+            # Get the current color in UAT
+            CURRENT_COLOR=$(kubectl get svc $SERVICE -n uat -o jsonpath='{.spec.selector.color}')
+
+            # Get the image from the current deployment in UAT
+            IMAGE=$(kubectl get deployment/$SERVICE-$CURRENT_COLOR -n uat -o jsonpath='{.spec.template.spec.containers[0].image}')
+            IMAGE_TAG=$(echo $IMAGE | cut -d ':' -f2)
+
+            echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Blue/green deploy to Production
+        run: |
+          SERVICE=${{ matrix.service.name }}
+          IMAGE_TAG=${{ steps.get-image.outputs.image_tag }}
+
+          echo "Promoting $SERVICE:$IMAGE_TAG from UAT to Production"
+
+          # Get current color in Production
+          CURRENT_COLOR=$(kubectl get svc $SERVICE -n prod -o jsonpath='{.spec.selector.color}')
+          if [ "$CURRENT_COLOR" = "green" ]; then NEW_COLOR=blue; else NEW_COLOR=green; fi
+
+          echo "Current color is $CURRENT_COLOR, deploying to $NEW_COLOR"
+
+          # Update image for the new color
+          kubectl set image deployment/$SERVICE-$NEW_COLOR \
+            $SERVICE=$ECR_URI/$REPO_PREFIX/$SERVICE:$IMAGE_TAG -n prod
+
+          # Wait for rollout to complete
+          kubectl rollout status deployment/$SERVICE-$NEW_COLOR -n prod
+
+          # If deployment was successful, switch traffic to the new color
+          if [ $? -eq 0 ]; then
+            echo "Deployment successful, switching traffic to $NEW_COLOR"
+            kubectl patch service $SERVICE -n prod -p \
+              "{\"spec\": {\"selector\": {\"app\": \"$SERVICE\", \"color\": \"$NEW_COLOR\"}}}"
+
+            echo "Successfully promoted $SERVICE to Production"
+          else
+            echo "Deployment failed, keeping traffic on $CURRENT_COLOR"
+            # Don't switch traffic if deployment failed
+            exit 1
+          fi

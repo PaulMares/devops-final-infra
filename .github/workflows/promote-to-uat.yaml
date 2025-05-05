@@ -1,0 +1,175 @@
+name: Promote to UAT
+
+on:
+  workflow_run:
+    workflows: ["Check and Deploy to QA"]
+    types:
+      - completed
+    branches:
+      - main
+
+jobs:
+  download-artifact:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    outputs:
+      services: ${{ steps.set-matrix.outputs.services }}
+
+    steps:
+      - name: Download artifact
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const artifacts = await github.rest.actions.listWorkflowRunArtifacts({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: ${{ github.event.workflow_run.id }}
+            });
+
+            const matchArtifact = artifacts.data.artifacts.find(artifact => {
+              return artifact.name === "deployed-services-qa"
+            });
+
+            if (!matchArtifact) {
+              console.log('No artifacts found');
+              return;
+            }
+
+            const download = await github.rest.actions.downloadArtifact({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              artifact_id: matchArtifact.id,
+              archive_format: 'zip'
+            });
+
+            const fs = require('fs');
+            fs.writeFileSync('${{ github.workspace }}/deployed-services.zip', Buffer.from(download.data));
+
+      - name: Extract artifact
+        run: |
+          if [ -f "deployed-services.zip" ]; then
+            unzip -o deployed-services.zip
+          else
+            echo "No artifact file found to extract"
+          fi
+
+      - name: Set matrix
+        id: set-matrix
+        run: |
+          if [ -f "deployed_services.json" ]; then
+            SERVICES=$(cat deployed_services.json)
+            echo "services=$SERVICES" >> $GITHUB_OUTPUT
+          else
+            echo "services={\"services\":[]}" >> $GITHUB_OUTPUT
+          fi
+
+  promote-to-uat:
+    needs: download-artifact
+    runs-on: ubuntu-latest
+    if: ${{ fromJson(needs.download-artifact.outputs.services).services[0] }}
+    outputs:
+      deployed_services: ${{ steps.collect.outputs.deployed_services }}
+
+    strategy:
+      matrix:
+        service: ${{ fromJson(needs.download-artifact.outputs.services).services }}
+
+    env:
+      ECR_URI: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+      REPO_PREFIX: devops-final
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} --name ${{ secrets.EKS_CLUSTER_NAME }}
+
+      - name: Blue/green deploy to UAT
+        id: deploy
+        run: |
+          SERVICE=${{ matrix.service.name }}
+          IMAGE_TAG=${{ matrix.service.image_tag }}
+
+          echo "Promoting $SERVICE:$IMAGE_TAG from QA to UAT"
+
+          # Get current color in UAT
+          CURRENT_COLOR=$(kubectl get svc $SERVICE -n uat -o jsonpath='{.spec.selector.color}')
+          if [ "$CURRENT_COLOR" = "green" ]; then NEW_COLOR=blue; else NEW_COLOR=green; fi
+
+          echo "Current color is $CURRENT_COLOR, deploying to $NEW_COLOR"
+
+          # Update image for the new color
+          kubectl set image deployment/$SERVICE-$NEW_COLOR \
+            $SERVICE=$ECR_URI/$REPO_PREFIX/$SERVICE:$IMAGE_TAG -n uat
+
+          # Wait for rollout to complete
+          kubectl rollout status deployment/$SERVICE-$NEW_COLOR -n uat
+
+          # If deployment was successful, switch traffic to the new color
+          if [ $? -eq 0 ]; then
+            echo "Deployment successful, switching traffic to $NEW_COLOR"
+            kubectl patch service $SERVICE -n uat -p \
+              "{\"spec\": {\"selector\": {\"app\": \"$SERVICE\", \"color\": \"$NEW_COLOR\"}}}"
+
+            # Record successful deployment
+            echo "$SERVICE:$IMAGE_TAG" > deployed-$SERVICE
+          else
+            echo "Deployment failed, rolling back and keeping traffic on $CURRENT_COLOR"
+            # Don't switch traffic if deployment failed
+
+            # Get the image from the current color deployment
+            CURRENT_IMAGE=$(kubectl get deployment/$SERVICE-$CURRENT_COLOR -n uat -o jsonpath='{.spec.template.spec.containers[0].image}')
+
+            # Reset the new color deployment to match the current color
+            kubectl set image deployment/$SERVICE-$NEW_COLOR \
+              $SERVICE=$CURRENT_IMAGE -n uat
+
+            # Wait for rollout to complete
+            kubectl rollout status deployment/$SERVICE-$NEW_COLOR -n uat
+
+            # Exit with error to indicate deployment failure
+            exit 1
+          fi
+
+      - name: Collect deployed services
+        if: always()
+        id: collect
+        run: |
+          echo "{" > deployed_services.json
+          echo "  \"services\": [" >> deployed_services.json
+
+          for SERVICE in frontend backend api-1 api-2; do
+            if [ -f "deployed-${SERVICE}" ]; then
+              # Get the image tag for this service
+              SERVICE_INFO=$(cat "deployed-${SERVICE}")
+              SERVICE_NAME=$(echo $SERVICE_INFO | cut -d ':' -f1)
+              IMAGE_TAG=$(echo $SERVICE_INFO | cut -d ':' -f2)
+
+              # Add service and image tag to the JSON file
+              echo "    {" >> deployed_services.json
+              echo "      \"name\": \"$SERVICE_NAME\"," >> deployed_services.json
+              echo "      \"image_tag\": \"$IMAGE_TAG\"" >> deployed_services.json
+              echo "    }," >> deployed_services.json
+            fi
+          done
+
+          # Remove trailing comma if any services were added
+          sed -i '$ s/,$//' deployed_services.json
+          echo "  ]" >> deployed_services.json
+          echo "}" >> deployed_services.json
+
+          DEPLOYED=$(cat deployed_services.json)
+          echo "deployed_services=$DEPLOYED" >> $GITHUB_OUTPUT
+
+      - name: Upload deployed services artifact
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: deployed-services-uat
+          path: deployed_services.json
+          retention-days: 1
