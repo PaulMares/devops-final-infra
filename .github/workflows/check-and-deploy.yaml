@@ -149,8 +149,10 @@ jobs:
           echo "  ]" >> deployed_services.json
           echo "}" >> deployed_services.json
 
-          DEPLOYED=$(cat deployed_services.json)
-          echo "changed_services=$DEPLOYED" >> $GITHUB_OUTPUT
+          # Use proper JSON escaping for GitHub Actions outputs
+          echo "changed_services<<EOF" >> $GITHUB_OUTPUT
+          cat deployed_services.json >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Upload deployed services artifact
         if: always()

@@ -57,8 +57,10 @@ jobs:
         id: set-matrix
         run: |
           if [ -f "deployed_services.json" ]; then
-            SERVICES=$(cat deployed_services.json)
-            echo "services=$SERVICES" >> $GITHUB_OUTPUT
+            # Use proper JSON escaping for GitHub Actions outputs
+            echo "services<<EOF" >> $GITHUB_OUTPUT
+            cat deployed_services.json >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
           else
             echo "services={\"services\":[]}" >> $GITHUB_OUTPUT
           fi
@@ -163,8 +165,10 @@ jobs:
           echo "  ]" >> deployed_services.json
           echo "}" >> deployed_services.json
 
-          DEPLOYED=$(cat deployed_services.json)
-          echo "deployed_services=$DEPLOYED" >> $GITHUB_OUTPUT
+          # Use proper JSON escaping for GitHub Actions outputs
+          echo "deployed_services<<EOF" >> $GITHUB_OUTPUT
+          cat deployed_services.json >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Upload deployed services artifact
         if: always()
