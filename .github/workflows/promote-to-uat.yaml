@@ -69,12 +69,11 @@ jobs:
     needs: download-artifact
     runs-on: ubuntu-latest
     if: ${{ fromJson(needs.download-artifact.outputs.services).services[0] }}
-    outputs:
-      deployed_services: ${{ steps.collect.outputs.deployed_services }}
 
     strategy:
       matrix:
         service: ${{ fromJson(needs.download-artifact.outputs.services).services }}
+      fail-fast: false  # Continue with other services if one fails
 
     env:
       ECR_URI: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
@@ -153,8 +152,30 @@ jobs:
             exit 1
           fi
 
-      - name: Collect deployed services
+      - name: Upload deployment result
         if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-result-uat-${{ matrix.service.name }}
+          path: deployed-${{ matrix.service.name }}
+          retention-days: 1
+          if-no-files-found: ignore
+
+  collect-results:
+    needs: promote-to-uat
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      deployed_services: ${{ steps.collect.outputs.deployed_services }}
+
+    steps:
+      - name: Download all deployment results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: deployment-result-uat-*
+          merge-multiple: true
+
+      - name: Collect deployed services
         id: collect
         run: |
           echo "{" > deployed_services.json
@@ -186,7 +207,6 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Upload deployed services artifact
-        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: deployed-services-uat

@@ -6,15 +6,11 @@ on:
   workflow_dispatch:     # Allow manual trigger
 
 jobs:
-  check-and-deploy:
+  check-changes:
     runs-on: ubuntu-latest
     outputs:
-      changed_services: ${{ steps.collect.outputs.changed_services }}
-
-    env:
-      ECR_URI: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
-      REPO_PREFIX: devops-final
-      NAMESPACE: qa
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      changed: ${{ steps.check-changes.outputs.changed }}
 
     steps:
       - name: Checkout infra repo
@@ -46,9 +42,6 @@ jobs:
             fi
           done
 
-          # Create a JSON array of changed services
-          echo "CHANGED_SERVICES=${CHANGED_SERVICES[@]}" >> $GITHUB_ENV
-
           # Exit if no services have changed
           if [ ${#CHANGED_SERVICES[@]} -eq 0 ]; then
             echo "No services have changed. Exiting."
@@ -57,8 +50,67 @@ jobs:
             echo "changed=true" >> $GITHUB_OUTPUT
           fi
 
-      - name: Configure AWS credentials
+      - name: Create matrix
+        id: set-matrix
         if: steps.check-changes.outputs.changed == 'true'
+        run: |
+          # Create a JSON array of services to build and deploy
+          echo "{" > matrix.json
+          echo "  \"service\": [" >> matrix.json
+
+          for SERVICE in frontend backend api-1 api-2; do
+            if [ -f "changed-${SERVICE}-tag" ]; then
+              IMAGE_TAG=$(cat changed-$SERVICE-tag)
+              echo "    {\"name\": \"$SERVICE\", \"tag\": \"$IMAGE_TAG\"}," >> matrix.json
+            fi
+          done
+
+          # Remove trailing comma if any services were added
+          sed -i '$ s/,$//' matrix.json
+
+          echo "  ]" >> matrix.json
+          echo "}" >> matrix.json
+
+          # Output the matrix
+          echo "matrix<<EOF" >> $GITHUB_OUTPUT
+          cat matrix.json >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Upload changed services
+        if: steps.check-changes.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: changed-services
+          path: changed-*-tag
+          retention-days: 1
+
+  build-and-deploy:
+    needs: check-changes
+    if: ${{ needs.check-changes.outputs.changed == 'true' }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix: ${{ fromJson(needs.check-changes.outputs.matrix) }}
+      fail-fast: false  # Continue with other services if one fails
+
+    env:
+      ECR_URI: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+      REPO_PREFIX: devops-final
+      NAMESPACE: qa
+
+    steps:
+      - name: Checkout infra repo
+        uses: actions/checkout@v3
+
+      - name: Clone source repo
+        run: git clone https://github.com/PaulMares/crud-react-node-mySQL-go.git source
+
+      - name: Download changed services
+        uses: actions/download-artifact@v4
+        with:
+          name: changed-services
+
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -66,64 +118,83 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Log in to Amazon ECR
-        if: steps.check-changes.outputs.changed == 'true'
         uses: aws-actions/amazon-ecr-login@v1
 
-      - name: Build and deploy changed services
-        if: steps.check-changes.outputs.changed == 'true'
+      - name: Build and push Docker image
+        run: |
+          SERVICE=${{ matrix.service.name }}
+          IMAGE_TAG=${{ matrix.service.tag }}
+
+          echo "Building and pushing $SERVICE:$IMAGE_TAG to ECR..."
+          docker build -t $ECR_URI/$REPO_PREFIX/$SERVICE:$IMAGE_TAG ./source/$SERVICE
+          docker push $ECR_URI/$REPO_PREFIX/$SERVICE:$IMAGE_TAG
+
+          # Tag as latest
+          docker tag $ECR_URI/$REPO_PREFIX/$SERVICE:$IMAGE_TAG $ECR_URI/$REPO_PREFIX/$SERVICE:latest
+          docker push $ECR_URI/$REPO_PREFIX/$SERVICE:latest
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} --name ${{ secrets.EKS_CLUSTER_NAME }}
+
+      - name: Blue/green deploy to QA
         id: deploy
         run: |
-          # Process each changed service
-          for SERVICE in ${CHANGED_SERVICES[@]}; do
-            echo "Processing $SERVICE..."
+          SERVICE=${{ matrix.service.name }}
+          IMAGE_TAG=${{ matrix.service.tag }}
 
-            # Get the commit hash for tagging
-            IMAGE_TAG=$(cat changed-$SERVICE-tag)
+          echo "Deploying $SERVICE to QA using blue/green strategy..."
 
-            # Build and push Docker image
-            echo "Building and pushing $SERVICE:$IMAGE_TAG to ECR..."
-            docker build -t $ECR_URI/$REPO_PREFIX/$SERVICE:$IMAGE_TAG ./source/$SERVICE
-            docker push $ECR_URI/$REPO_PREFIX/$SERVICE:$IMAGE_TAG
+          # Get current color
+          CURRENT_COLOR=$(kubectl get svc $SERVICE -n $NAMESPACE -o jsonpath='{.spec.selector.color}')
+          if [ "$CURRENT_COLOR" = "green" ]; then NEW_COLOR=blue; else NEW_COLOR=green; fi
 
-            # Tag as latest
-            docker tag $ECR_URI/$REPO_PREFIX/$SERVICE:$IMAGE_TAG $ECR_URI/$REPO_PREFIX/$SERVICE:latest
-            docker push $ECR_URI/$REPO_PREFIX/$SERVICE:latest
+          echo "Current color is $CURRENT_COLOR, deploying to $NEW_COLOR"
 
-            # Update kubeconfig
-            aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} --name ${{ secrets.EKS_CLUSTER_NAME }}
+          # Update image for the new color
+          kubectl set image deployment/$SERVICE-$NEW_COLOR \
+            $SERVICE=$ECR_URI/$REPO_PREFIX/$SERVICE:$IMAGE_TAG -n $NAMESPACE
 
-            # Blue/green deploy to QA
-            echo "Deploying $SERVICE to QA using blue/green strategy..."
+          # Wait for rollout to complete
+          kubectl rollout status deployment/$SERVICE-$NEW_COLOR -n $NAMESPACE
 
-            # Get current color
-            CURRENT_COLOR=$(kubectl get svc $SERVICE -n $NAMESPACE -o jsonpath='{.spec.selector.color}')
-            if [ "$CURRENT_COLOR" = "green" ]; then NEW_COLOR=blue; else NEW_COLOR=green; fi
+          # If deployment was successful, switch traffic to the new color
+          if [ $? -eq 0 ]; then
+            echo "Deployment successful, switching traffic to $NEW_COLOR"
+            kubectl patch service $SERVICE -n $NAMESPACE -p \
+              "{\"spec\": {\"selector\": {\"app\": \"$SERVICE\", \"color\": \"$NEW_COLOR\"}}}"
 
-            echo "Current color is $CURRENT_COLOR, deploying to $NEW_COLOR"
+            # Record successful deployment
+            echo "$SERVICE:$IMAGE_TAG" > deployed-$SERVICE
+          else
+            echo "Deployment failed, keeping traffic on $CURRENT_COLOR"
+            # Don't switch traffic if deployment failed
+            exit 1
+          fi
 
-            # Update image for the new color
-            kubectl set image deployment/$SERVICE-$NEW_COLOR \
-              $SERVICE=$ECR_URI/$REPO_PREFIX/$SERVICE:$IMAGE_TAG -n $NAMESPACE
+      - name: Upload deployment result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-result-${{ matrix.service.name }}
+          path: deployed-${{ matrix.service.name }}
+          retention-days: 1
+          if-no-files-found: ignore
 
-            # Wait for rollout to complete
-            kubectl rollout status deployment/$SERVICE-$NEW_COLOR -n $NAMESPACE
+  collect-results:
+    needs: build-and-deploy
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      changed_services: ${{ steps.collect.outputs.changed_services }}
 
-            # If deployment was successful, switch traffic to the new color
-            if [ $? -eq 0 ]; then
-              echo "Deployment successful, switching traffic to $NEW_COLOR"
-              kubectl patch service $SERVICE -n $NAMESPACE -p \
-                "{\"spec\": {\"selector\": {\"app\": \"$SERVICE\", \"color\": \"$NEW_COLOR\"}}}"
-
-              # Record successful deployment
-              echo "$SERVICE:$IMAGE_TAG" > deployed-$SERVICE
-            else
-              echo "Deployment failed, keeping traffic on $CURRENT_COLOR"
-              # Don't switch traffic if deployment failed
-            fi
-          done
+    steps:
+      - name: Download all deployment results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: deployment-result-*
+          merge-multiple: true
 
       - name: Collect deployed services
-        if: always()
         id: collect
         run: |
           echo "{" > deployed_services.json
@@ -155,7 +226,6 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Upload deployed services artifact
-        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: deployed-services-qa
