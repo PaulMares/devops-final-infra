@@ -291,7 +291,7 @@ jobs:
     strategy:
       matrix:
         # Use try/catch to handle JSON parsing errors and provide a default empty array
-        service: ${{ (contains(needs.check-matrix.outputs.matrix_json, '"services"')) && fromJson(needs.check-matrix.outputs.matrix_json).services || fromJson('{"services":[]}').services }}
+        service: ${{ fromJson(needs.download-artifact.outputs.services).services }}
       fail-fast: false
 
     env:
