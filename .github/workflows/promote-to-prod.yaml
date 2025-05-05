@@ -178,8 +178,22 @@ jobs:
       )
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
+      debug_info: ${{ steps.debug.outputs.info }}
 
     steps:
+      - name: Debug job inputs
+        id: debug
+        run: |
+          echo "::notice::auto_promote: ${{ github.event.inputs.auto_promote }}"
+          echo "::notice::download-artifact.result: ${{ needs.download-artifact.result }}"
+          echo "::notice::prepare-manual-matrix.result: ${{ needs.prepare-manual-matrix.result }}"
+
+          # Create debug info for output
+          echo "info<<EOF" >> $GITHUB_OUTPUT
+          echo "auto_promote: ${{ github.event.inputs.auto_promote }}" >> $GITHUB_OUTPUT
+          echo "download-artifact.result: ${{ needs.download-artifact.result }}" >> $GITHUB_OUTPUT
+          echo "prepare-manual-matrix.result: ${{ needs.prepare-manual-matrix.result }}" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
       - name: Set matrix
         id: set-matrix
         run: |
@@ -211,17 +225,30 @@ jobs:
   check-matrix:
     needs: determine-matrix
     runs-on: ubuntu-latest
-    if: ${{ needs.determine-matrix.result == 'success' }}
+    if: always()
     outputs:
       has_services: ${{ steps.check.outputs.has_services }}
       matrix_json: ${{ steps.check.outputs.matrix_json }}
+      determine_matrix_result: ${{ needs.determine-matrix.result }}
 
     steps:
+      - name: Debug determine-matrix result
+        run: |
+          echo "::notice::determine-matrix result: ${{ needs.determine-matrix.result }}"
+          echo "::notice::determine-matrix debug info: ${{ needs.determine-matrix.outputs.debug_info }}"
       - name: Check matrix structure
         id: check
         run: |
           # Print the raw matrix output for debugging
           echo "::notice::Raw matrix from determine-matrix: ${{ needs.determine-matrix.outputs.matrix }}"
+
+          # Check if matrix output is empty or null
+          if [ -z "${{ needs.determine-matrix.outputs.matrix }}" ]; then
+            echo "::notice::Matrix output is empty or null"
+            echo "has_services=false" >> $GITHUB_OUTPUT
+            echo "matrix_json={\"services\":[]}" >> $GITHUB_OUTPUT
+            exit 0
+          fi
 
           # Parse the matrix output to check its structure
           MATRIX='${{ needs.determine-matrix.outputs.matrix }}'
@@ -230,14 +257,23 @@ jobs:
           # Check if the matrix has a services property
           if grep -q '"services"' matrix.json; then
             echo "::notice::Matrix has services property"
-            echo "has_services=true" >> $GITHUB_OUTPUT
+
+            # Check if the services array is empty
+            if grep -q '"services": *\[\]' matrix.json; then
+              echo "::notice::Services array is empty"
+              echo "has_services=false" >> $GITHUB_OUTPUT
+            else
+              echo "::notice::Services array has items"
+              echo "has_services=true" >> $GITHUB_OUTPUT
+            fi
+
             echo "matrix_json<<EOF" >> $GITHUB_OUTPUT
             echo "$MATRIX" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
           else
             echo "::notice::Matrix does not have services property"
             echo "has_services=false" >> $GITHUB_OUTPUT
-            echo "matrix_json={}" >> $GITHUB_OUTPUT
+            echo "matrix_json={\"services\":[]}" >> $GITHUB_OUTPUT
           fi
 
           # Print the matrix content for debugging
@@ -252,12 +288,17 @@ jobs:
     strategy:
       matrix:
         service: ${{ fromJson(needs.check-matrix.outputs.matrix_json).services }}
+      fail-fast: false
 
     env:
       ECR_URI: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
       REPO_PREFIX: devops-final
 
     steps:
+      - name: Debug job conditions
+        run: |
+          echo "::notice::check-matrix.outputs.has_services: ${{ needs.check-matrix.outputs.has_services }}"
+          echo "::notice::check-matrix.outputs.determine_matrix_result: ${{ needs.check-matrix.outputs.determine_matrix_result }}"
       - name: Debug matrix
         run: |
           echo "::notice::Matrix service: ${{ toJson(matrix.service) }}"
