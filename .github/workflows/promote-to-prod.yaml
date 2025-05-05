@@ -120,8 +120,9 @@ jobs:
         id: set-matrix
         run: |
           if [ -f "deployed_services.json" ]; then
-            SERVICES=$(cat deployed_services.json)
-            echo "services=$SERVICES" >> $GITHUB_OUTPUT
+            echo "services<<EOF" >> $GITHUB_OUTPUT
+            cat deployed_services.json >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
           else
             echo "services={\"services\":[]}" >> $GITHUB_OUTPUT
           fi
@@ -163,8 +164,9 @@ jobs:
           echo "  ]" >> services.json
           echo "}" >> services.json
 
-          SERVICES=$(cat services.json)
-          echo "services=$SERVICES" >> $GITHUB_OUTPUT
+          echo "services<<EOF" >> $GITHUB_OUTPUT
+          cat services.json >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
   determine-matrix:
     runs-on: ubuntu-latest
@@ -181,12 +183,13 @@ jobs:
       - name: Set matrix
         id: set-matrix
         run: |
+          echo "matrix<<EOF" >> $GITHUB_OUTPUT
           if [ "${{ github.event.inputs.auto_promote }}" = "true" ]; then
-            MATRIX='${{ needs.download-artifact.outputs.services }}'
+            echo '${{ needs.download-artifact.outputs.services }}' >> $GITHUB_OUTPUT
           else
-            MATRIX='${{ needs.prepare-manual-matrix.outputs.services }}'
+            echo '${{ needs.prepare-manual-matrix.outputs.services }}' >> $GITHUB_OUTPUT
           fi
-          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
   promote-to-prod:
     needs: determine-matrix
