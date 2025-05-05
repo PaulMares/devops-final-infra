@@ -21,5 +21,18 @@ spec:
           ports:
             - containerPort: 80
           imagePullPolicy: Always
-      imagePullSecrets:
-        - name: regcred
+          env:
+            - name: VITE_BACKEND_HOST
+              value: backend
+            - name: VITE_BACKEND_PORT
+              value: "8800"
+            - name: VITE_API1_HOST
+              value: api-1
+            - name: VITE_API1_PORT
+              value: "8802"
+            - name: VITE_API2_HOST
+              value: api-2
+            - name: VITE_API2_PORT
+              value: "8804"
+            - name: VITE_PROTO
+              value: http

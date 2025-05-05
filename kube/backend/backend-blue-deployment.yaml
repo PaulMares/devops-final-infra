@@ -21,24 +21,3 @@ spec:
           ports:
             - containerPort: 8800
           imagePullPolicy: Always
-          env:
-            - name: DB_HOST
-              value: "mysql"
-            - name: DB_USER
-              valueFrom:
-                secretKeyRef:
-                  name: mysql-secret
-                  key: mysql-user
-            - name: DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: mysql-secret
-                  key: mysql-password
-            - name: DB_NAME
-              valueFrom:
-                secretKeyRef:
-                  name: mysql-secret
-                  key: mysql-database
-
-      imagePullSecrets:
-        - name: regcred
