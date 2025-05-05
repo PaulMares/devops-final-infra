@@ -154,7 +154,7 @@ jobs:
 
       - name: Upload deployed services artifact
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: deployed-services-qa
           path: deployed_services.json
