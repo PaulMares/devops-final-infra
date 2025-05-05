@@ -20,5 +20,6 @@ spec:
           image: 629585638563.dkr.ecr.us-east-1.amazonaws.com/devops-final/api-2:latest
           ports:
             - containerPort: 8804
+          imagePullPolicy: Always
       imagePullSecrets:
         - name: regcred
