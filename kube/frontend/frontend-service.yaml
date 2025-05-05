@@ -8,6 +8,7 @@ spec:
     app: frontend
     color: blue  # Route by default to blue — will be switched by the workflow
   ports:
-    - port: 80
+    - protocol: TCP
+      port: 80
       targetPort: 80
-  type: ClusterIP
+  type: LoadBalancer
