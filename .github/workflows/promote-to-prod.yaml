@@ -286,7 +286,7 @@ jobs:
   promote-to-prod:
     needs: check-matrix
     runs-on: ubuntu-latest
-    if: ${{ needs.check-matrix.result == 'success' && fromJson(needs.check-matrix.outputs.matrix_json).services[0] }}
+    if: ${{ needs.check-matrix.result == 'success'}}
 
     strategy:
       matrix:
