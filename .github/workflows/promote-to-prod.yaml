@@ -202,7 +202,7 @@ jobs:
   promote-to-prod:
     needs: determine-matrix
     runs-on: ubuntu-latest
-    if: ${{ needs.determine-matrix.result == 'success' && fromJson(needs.determine-matrix.outputs.matrix).services != null && fromJson(needs.determine-matrix.outputs.matrix).services[0] != null }}
+    if: ${{ needs.determine-matrix.result == 'success' && fromJson(needs.determine-matrix.outputs.matrix).services !== null && fromJson(needs.determine-matrix.outputs.matrix).services[0] !== null }}
 
     strategy:
       matrix:
