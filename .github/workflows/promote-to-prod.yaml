@@ -173,8 +173,8 @@ jobs:
     needs: [download-artifact, prepare-manual-matrix]
     if: |
       always() && (
-        (needs.download-artifact.result == 'success' && fromJson(needs.download-artifact.outputs.services).services[0]) ||
-        (needs.prepare-manual-matrix.result == 'success' && fromJson(needs.prepare-manual-matrix.outputs.services).services[0])
+        (needs.download-artifact.result == 'success' && github.event.inputs.auto_promote == 'true') ||
+        (needs.prepare-manual-matrix.result == 'success' && github.event.inputs.auto_promote != 'true')
       )
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -191,9 +191,18 @@ jobs:
           fi
           echo "EOF" >> $GITHUB_OUTPUT
 
+          # Debug output
+          echo "::debug::Matrix content:"
+          if [ "${{ github.event.inputs.auto_promote }}" = "true" ]; then
+            echo "::debug::${{ needs.download-artifact.outputs.services }}"
+          else
+            echo "::debug::${{ needs.prepare-manual-matrix.outputs.services }}"
+          fi
+
   promote-to-prod:
     needs: determine-matrix
     runs-on: ubuntu-latest
+    if: ${{ needs.determine-matrix.result == 'success' && fromJson(needs.determine-matrix.outputs.matrix).services != null && fromJson(needs.determine-matrix.outputs.matrix).services[0] != null }}
 
     strategy:
       matrix:
@@ -204,6 +213,10 @@ jobs:
       REPO_PREFIX: devops-final
 
     steps:
+      - name: Debug matrix
+        run: |
+          echo "::debug::Matrix service: ${{ toJson(matrix.service) }}"
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
