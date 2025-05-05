@@ -292,7 +292,8 @@ jobs:
 
     strategy:
       matrix:
-        service: ${{ fromJson(needs.check-matrix.outputs.matrix_json).services }}
+        # Use try/catch to handle JSON parsing errors and provide a default empty array
+        service: ${{ (contains(needs.check-matrix.outputs.matrix_json, '"services"')) && fromJson(needs.check-matrix.outputs.matrix_json).services || fromJson('{"services":[]}').services }}
       fail-fast: false
 
     env:
@@ -306,7 +307,22 @@ jobs:
           echo "::notice::check-matrix.outputs.determine_matrix_result: ${{ needs.check-matrix.outputs.determine_matrix_result }}"
           echo "::notice::check-matrix.result: ${{ needs.check-matrix.result }}"
           echo "::notice::Matrix JSON: ${{ needs.check-matrix.outputs.matrix_json }}"
-          echo "::notice::First service check: ${{ fromJson(needs.check-matrix.outputs.matrix_json).services[0] }}"
+          echo "::notice::Contains 'services': ${{ contains(needs.check-matrix.outputs.matrix_json, '"services"') }}"
+
+          # Write matrix_json to a file for inspection
+          echo '${{ needs.check-matrix.outputs.matrix_json }}' > matrix_debug.json
+          echo "::notice::Matrix JSON file content:"
+          cat matrix_debug.json
+
+          # Try to parse the JSON and check services array
+          echo "::notice::Attempting to parse JSON and check services array..."
+          if jq -e '.services' matrix_debug.json > /dev/null 2>&1; then
+            echo "::notice::Services array exists"
+            echo "::notice::Services array length: $(jq '.services | length' matrix_debug.json)"
+            echo "::notice::First service: $(jq '.services[0]' matrix_debug.json)"
+          else
+            echo "::notice::Services array does not exist or JSON is invalid"
+          fi
       - name: Debug matrix
         run: |
           echo "::notice::Matrix service: ${{ toJson(matrix.service) }}"
