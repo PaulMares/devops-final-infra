@@ -17,6 +17,8 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: 629585638563.dkr.ecr.us-east-1.amazonaws.com/devops-final/frontend:latest
+          image: public.ecr.aws/g1l2p8r3/devops-final/api-1
           ports:
             - containerPort: 80
+      imagePullSecrets:
+        - name: regcred

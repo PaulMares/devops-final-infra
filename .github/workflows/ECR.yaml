@@ -13,7 +13,7 @@ jobs:
         service: [ frontend, backend, api-1, api-2 ]
 
     env:
-      ECR_URI: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+      ECR_URI: public.ecr.aws/g1l2p8r3
       REPO_PREFIX: devops-final
       NAMESPACE: qa
 
