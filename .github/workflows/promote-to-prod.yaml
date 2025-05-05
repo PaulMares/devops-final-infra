@@ -280,10 +280,15 @@ jobs:
           echo "::notice::Matrix content:"
           cat matrix.json
 
+          # Additional debugging to verify the output values
+          echo "::notice::has_services output value: $(grep has_services $GITHUB_OUTPUT | cut -d= -f2)"
+          echo "::notice::matrix_json output format check:"
+          grep -A 10 matrix_json $GITHUB_OUTPUT
+
   promote-to-prod:
     needs: check-matrix
     runs-on: ubuntu-latest
-    if: ${{ needs.check-matrix.outputs.has_services == 'true' }}
+    if: ${{ needs.check-matrix.result == 'success' && fromJson(needs.check-matrix.outputs.matrix_json).services[0] }}
 
     strategy:
       matrix:
@@ -299,6 +304,9 @@ jobs:
         run: |
           echo "::notice::check-matrix.outputs.has_services: ${{ needs.check-matrix.outputs.has_services }}"
           echo "::notice::check-matrix.outputs.determine_matrix_result: ${{ needs.check-matrix.outputs.determine_matrix_result }}"
+          echo "::notice::check-matrix.result: ${{ needs.check-matrix.result }}"
+          echo "::notice::Matrix JSON: ${{ needs.check-matrix.outputs.matrix_json }}"
+          echo "::notice::First service check: ${{ fromJson(needs.check-matrix.outputs.matrix_json).services[0] }}"
       - name: Debug matrix
         run: |
           echo "::notice::Matrix service: ${{ toJson(matrix.service) }}"
