@@ -183,6 +183,13 @@ jobs:
       - name: Set matrix
         id: set-matrix
         run: |
+          # Print the raw services output for debugging
+          if [ "${{ github.event.inputs.auto_promote }}" = "true" ]; then
+            echo "::notice::Raw services from download-artifact: ${{ needs.download-artifact.outputs.services }}"
+          else
+            echo "::notice::Raw services from prepare-manual-matrix: ${{ needs.prepare-manual-matrix.outputs.services }}"
+          fi
+
           echo "matrix<<EOF" >> $GITHUB_OUTPUT
           if [ "${{ github.event.inputs.auto_promote }}" = "true" ]; then
             echo '${{ needs.download-artifact.outputs.services }}' >> $GITHUB_OUTPUT
@@ -191,22 +198,60 @@ jobs:
           fi
           echo "EOF" >> $GITHUB_OUTPUT
 
-          # Debug output
-          echo "::debug::Matrix content:"
+          # Create a temporary file to see what's being set
           if [ "${{ github.event.inputs.auto_promote }}" = "true" ]; then
-            echo "::debug::${{ needs.download-artifact.outputs.services }}"
+            echo '${{ needs.download-artifact.outputs.services }}' > matrix_content.json
           else
-            echo "::debug::${{ needs.prepare-manual-matrix.outputs.services }}"
+            echo '${{ needs.prepare-manual-matrix.outputs.services }}' > matrix_content.json
           fi
 
-  promote-to-prod:
+          echo "::notice::Matrix content from file:"
+          cat matrix_content.json
+
+  check-matrix:
     needs: determine-matrix
     runs-on: ubuntu-latest
-    if: ${{ needs.determine-matrix.result == 'success' && fromJson(needs.determine-matrix.outputs.matrix).services !== null && fromJson(needs.determine-matrix.outputs.matrix).services[0] !== null }}
+    if: ${{ needs.determine-matrix.result == 'success' }}
+    outputs:
+      has_services: ${{ steps.check.outputs.has_services }}
+      matrix_json: ${{ steps.check.outputs.matrix_json }}
+
+    steps:
+      - name: Check matrix structure
+        id: check
+        run: |
+          # Print the raw matrix output for debugging
+          echo "::notice::Raw matrix from determine-matrix: ${{ needs.determine-matrix.outputs.matrix }}"
+
+          # Parse the matrix output to check its structure
+          MATRIX='${{ needs.determine-matrix.outputs.matrix }}'
+          echo "$MATRIX" > matrix.json
+
+          # Check if the matrix has a services property
+          if grep -q '"services"' matrix.json; then
+            echo "::notice::Matrix has services property"
+            echo "has_services=true" >> $GITHUB_OUTPUT
+            echo "matrix_json<<EOF" >> $GITHUB_OUTPUT
+            echo "$MATRIX" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "::notice::Matrix does not have services property"
+            echo "has_services=false" >> $GITHUB_OUTPUT
+            echo "matrix_json={}" >> $GITHUB_OUTPUT
+          fi
+
+          # Print the matrix content for debugging
+          echo "::notice::Matrix content:"
+          cat matrix.json
+
+  promote-to-prod:
+    needs: check-matrix
+    runs-on: ubuntu-latest
+    if: ${{ needs.check-matrix.outputs.has_services == 'true' }}
 
     strategy:
       matrix:
-        service: ${{ fromJson(needs.determine-matrix.outputs.matrix).services }}
+        service: ${{ fromJson(needs.check-matrix.outputs.matrix_json).services }}
 
     env:
       ECR_URI: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
@@ -215,7 +260,11 @@ jobs:
     steps:
       - name: Debug matrix
         run: |
-          echo "::debug::Matrix service: ${{ toJson(matrix.service) }}"
+          echo "::notice::Matrix service: ${{ toJson(matrix.service) }}"
+          echo "::notice::Service name: ${{ matrix.service.name }}"
+          if [ "${{ github.event.inputs.auto_promote }}" = "true" ]; then
+            echo "::notice::Image tag from artifact: ${{ matrix.service.image_tag }}"
+          fi
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
