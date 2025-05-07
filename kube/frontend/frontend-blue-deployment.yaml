@@ -19,7 +19,7 @@ spec:
         - name: frontend
           image: 629585638563.dkr.ecr.us-east-1.amazonaws.com/devops-final/frontend:latest
           ports:
-            - containerPort: 80
+            - containerPort: 443
           imagePullPolicy: Always
           env:
             - name: VITE_BACKEND_HOST

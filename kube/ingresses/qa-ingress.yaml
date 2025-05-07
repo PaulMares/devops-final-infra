@@ -6,8 +6,9 @@ metadata:
   annotations:
     alb.ingress.kubernetes.io/scheme: internet-facing
     alb.ingress.kubernetes.io/target-type: ip
-    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS": 443}]'
     alb.ingress.kubernetes.io/group.name: shared-frontend
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:629585638563:certificate/7c1a12a4-38e3-4905-988a-e8d561784177
 spec:
   ingressClassName: alb
   rules:
@@ -19,4 +20,4 @@ spec:
               service:
                 name: frontend
                 port:
-                  number: 80
+                  number: 443
