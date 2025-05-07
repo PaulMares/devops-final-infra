@@ -2,7 +2,7 @@ name: Promote to UAT
 
 on:
   workflow_run:
-    workflows: ["Check and Deploy to QA"]
+    workflows: [ "Check and Deploy to QA" ]
     types:
       - completed
     branches:
@@ -202,7 +202,7 @@ jobs:
           echo "}" >> deployed_services.json
 
           # Use proper JSON escaping for GitHub Actions outputs
-          echo "deployed_services<<EOF" >> $GITHUB_OUTPUT
+          echo "changed_services<<EOF" >> $GITHUB_OUTPUT
           cat deployed_services.json >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 

@@ -286,6 +286,7 @@ jobs:
   promote-to-prod:
     needs: check-matrix
     runs-on: ubuntu-latest
+    if: always()
 
     strategy:
       matrix:
