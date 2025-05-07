@@ -286,11 +286,11 @@ jobs:
   promote-to-prod:
     needs: check-matrix
     runs-on: ubuntu-latest
-    if: always()
+    if: ${{ fromJson(needs.download-artifact.outputs.services).services[0] }}
 
     strategy:
       matrix:
-        service: ${{ fromJson(needs.download-artifact.outputs.services).services }}
+        service: ${{ fromJson(needs.determine-matrix.outputs.services).services }}
       fail-fast: false
 
     env:
