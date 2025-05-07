@@ -286,7 +286,7 @@ jobs:
   promote-to-prod:
     needs: check-matrix
     runs-on: ubuntu-latest
-    if: needs.check-matrix.outputs.has_services == 'true'
+    if: always()
 
     strategy:
       matrix:
