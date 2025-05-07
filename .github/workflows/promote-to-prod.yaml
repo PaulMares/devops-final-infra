@@ -286,7 +286,6 @@ jobs:
   promote-to-prod:
     needs: check-matrix
     runs-on: ubuntu-latest
-    if: ${{ needs.check-matrix.status == 'success'}}
 
     strategy:
       matrix:
