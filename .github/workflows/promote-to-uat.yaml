@@ -202,7 +202,7 @@ jobs:
           echo "}" >> deployed_services.json
 
           # Use proper JSON escaping for GitHub Actions outputs
-          echo "changed_services<<EOF" >> $GITHUB_OUTPUT
+          echo "deployed_services<<EOF" >> $GITHUB_OUTPUT
           cat deployed_services.json >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
