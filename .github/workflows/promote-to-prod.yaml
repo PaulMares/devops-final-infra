@@ -290,7 +290,7 @@ jobs:
 
     strategy:
       matrix:
-        service: ${{ fromJson(needs.determine-matrix.outputs.services).services }}
+        service: ${{ fromJson(needs.check-matrix.outputs.matrix_json).services }}
       fail-fast: false
 
     env:
