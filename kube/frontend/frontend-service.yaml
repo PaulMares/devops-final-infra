@@ -9,6 +9,6 @@ spec:
     color: blue  # Route by default to blue — will be switched by the workflow
   ports:
     - protocol: TCP
-      port: 443
-      targetPort: 443
+      port: 80
+      targetPort: 80
   type: ClusterIP
