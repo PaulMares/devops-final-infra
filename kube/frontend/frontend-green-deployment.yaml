@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: frontend-green
-  namespace: qa
+  namespace: prod
 spec:
   replicas: 1
   selector:
@@ -36,3 +36,7 @@ spec:
               value: "8804"
             - name: VITE_PROTO
               value: http
+            - name: VITE_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace

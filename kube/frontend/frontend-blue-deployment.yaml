@@ -36,3 +36,7 @@ spec:
               value: "8804"
             - name: VITE_PROTO
               value: http
+            - name: VITE_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
